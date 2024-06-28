@@ -1,3 +1,4 @@
+#Project Preview:
 Our project focuses on advancing the field of gastrointestinal (GI) tract segmentation, aiming to
 enhance the differentiation between healthy organs and tumor tissues for improved radiation
 therapy planning. We are leveraging the transformative potential of deep learning, specifically by
@@ -16,3 +17,15 @@ Through these innovations, our project aims to develop a tool that surpasses cur
 GI tract segmentation, setting a new benchmark in the field. The ultimate objective is to
 contribute to the advancement of radiation therapy planning, leading to more effective treatments
 and improved patient outcomes.
+
+#Additional info:
+Implementation ahead, components to be built (in folder "Stage2"):
+- [] BiFusion block
+- [X] TUP block
+- [] Coarse-to-fine attention block (according to the 3D-TransUNet specs)
+- [] Multi-scale skip connections: either Seminar TransAttUnet strategy or imo MultiTrans can also be good)
+- [] Data augmentation techniques
+- [] Multi-level loss (as part of the training process
+- [] Test hyperparameters
+- [] Review results
+- [] GUI wrapper
