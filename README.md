@@ -1,4 +1,4 @@
-#Project Preview:
+## Project Preview:
 Our project focuses on advancing the field of gastrointestinal (GI) tract segmentation, aiming to
 enhance the differentiation between healthy organs and tumor tissues for improved radiation
 therapy planning. We are leveraging the transformative potential of deep learning, specifically by
@@ -18,7 +18,7 @@ GI tract segmentation, setting a new benchmark in the field. The ultimate object
 contribute to the advancement of radiation therapy planning, leading to more effective treatments
 and improved patient outcomes.
 
-#Additional info:
+## Additional info:
 Implementation ahead, components to be built (in folder "Stage2"):
 - [] BiFusion block
 - [X] TUP block
