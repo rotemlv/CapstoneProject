@@ -20,7 +20,7 @@ and improved patient outcomes.
 
 ## Additional info:
 Implementation ahead, components to be built (in folder "Stage2"):
-- [] BiFusion block
+- [] BiFusion block: added file, work in progress (still does not work)
 - [X] TUP block
 - [] Coarse-to-fine attention block (according to the 3D-TransUNet specs)
 - [] Multi-scale skip connections: either Seminar TransAttUnet strategy or imo MultiTrans can also be good)
