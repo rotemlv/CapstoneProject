@@ -65,10 +65,10 @@ class ChannelAttention(nn.Module):
         self.sigmoid = nn.Sigmoid()  # Sigmoid activation
 
     def forward(self, x):
-        t1 = self.avg_spatial(x)  # Eq. (8)
-        t2 = self.triple_conv(t1)  # Eq. (9)
-        t3 = self.sigmoid(t2) * x  # Eq. (10)
-        return t3
+        out = self.avg_spatial(x)  # Eq. (8)
+        out = self.triple_conv(out)  # Eq. (9)
+        out = self.sigmoid(out) * x  # Eq. (10)
+        return out
 
 
 class SpatialAttention(nn.Module):
@@ -89,7 +89,7 @@ class SpatialAttention(nn.Module):
 class MultimodalFusion(nn.Module):
     def __init__(self, num_channels):
         super(MultimodalFusion, self).__init__()
-        self.conv = nn.Conv2d(num_channels * 2, num_channels, kernel_size=3, padding=1)
+        self.conv = nn.Conv2d(num_channels, num_channels, kernel_size=3, padding=1)
 
     def forward(self, ti, ci):
         # Adjusting to match the paper's description -
@@ -124,8 +124,6 @@ class BiFusionBlock(nn.Module):
 if __name__ == '__main__':
     import torch.optim as optim
 
-
-    # Assuming BiFusionBlock is defined as per the previous instructions
     class SimpleModel(nn.Module):
         def __init__(self, num_channels):
             super(SimpleModel, self).__init__()
