@@ -3,91 +3,54 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 """
-This version uses BiFTransNet's description (convolutions instead of linear layers) for the Squeeze-Excitation block
+This variant is loyal to the implementation mentioned in the sources provided in BiFTransNet
 """
 
 
-class AvgSpatial(nn.Module):
+class Flatten(nn.Module):
     def forward(self, x):
-        return F.avg_pool2d(x, x.size()[2:])
-
-
-class TripleConv(nn.Module):
-    def __init__(self, num_channels):
-        super(TripleConv, self).__init__()
-        self.conv1 = nn.Conv2d(num_channels, num_channels, kernel_size=1)
-        self.bn1 = nn.BatchNorm2d(num_channels)
-        self.relu1 = nn.ReLU(inplace=True)
-
-        self.conv2 = nn.Conv2d(num_channels, num_channels, kernel_size=1)
-        self.bn2 = nn.BatchNorm2d(num_channels)
-        self.relu2 = nn.ReLU(inplace=True)
-
-        self.conv3 = nn.Conv2d(num_channels, num_channels, kernel_size=1)
-        self.bn3 = nn.BatchNorm2d(num_channels)
-        self.relu3 = nn.ReLU(inplace=True)
-
-    def forward(self, x):
-        do_bn = x.size(2) > 1 and x.size(3) > 1 # Check if spatial dimensions are larger than 1x1
-        identity = x
-
-        out = self.conv1(x)
-        if do_bn:
-            out = self.bn1(out)
-        out = self.relu1(out)
-
-        out += identity  # Skip connection
-
-        out = self.conv2(out)
-        if do_bn:  # Check again for spatial dimensions
-            out = self.bn2(out)
-        out = self.relu2(out)
-
-        out += identity  # Another skip connection
-
-        out = self.conv3(out)
-        if do_bn:  # Final check for spatial dimensions
-            out = self.bn3(out)
-        out = self.relu3(out)
-
-        return out
-
-
-def max_channel_pool(x):
-    return x.max(dim=1, keepdim=True)[0]
-
-
-def avg_channel_pool(x):
-    return x.mean(dim=1, keepdim=True)
+        return x.view(x.size(0), -1)
 
 
 class ChannelAttention(nn.Module):
-    def __init__(self, num_channels):
+    def __init__(self, input_channels, reduction_ratio=16):
         super(ChannelAttention, self).__init__()
-        self.avg_spatial = AvgSpatial()  # Average spatial pooling
-        self.triple_conv = TripleConv(num_channels)  # Triple convolution block
-        self.sigmoid = nn.Sigmoid()  # Sigmoid activation
+        self.input_channels = input_channels
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.max_pool = nn.AdaptiveMaxPool2d(1)
+        #  uses Convolutions instead of Linear
+        self.MLP = nn.Sequential(
+            Flatten(),
+            nn.Linear(input_channels, input_channels // reduction_ratio),
+            nn.ReLU(),
+            nn.Linear(input_channels // reduction_ratio, input_channels)
+        )
 
     def forward(self, x):
-        out = self.avg_spatial(x)  # Eq. (8)
-        out = self.triple_conv(out)  # Eq. (9)
-        out = self.sigmoid(out) * x  # Eq. (10)
-        return out
+        # Take the input and apply average and max pooling
+        avg_values = self.avg_pool(x)
+        max_values = self.max_pool(x)
+        out = self.MLP(avg_values) + self.MLP(max_values)
+        scale = x * torch.sigmoid(out).unsqueeze(2).unsqueeze(3).expand_as(x)
+        return scale
 
 
 class SpatialAttention(nn.Module):
-    def __init__(self, num_channels):
+    def __init__(self, kernel_size=7):
         super(SpatialAttention, self).__init__()
-        self.conv = nn.Conv2d(2, 1, kernel_size=3, padding=1)  # Convolution for spatial attention
-        self.sigmoid = nn.Sigmoid()  # Sigmoid activation
+        assert kernel_size in (3, 7), 'kernel size must be 3 or 7'
+        padding = 3 if kernel_size == 7 else 1
+        self.conv = nn.Conv2d(2, 1, kernel_size=kernel_size, padding=padding, bias=False)
+        self.bn = nn.BatchNorm2d(1)
 
     def forward(self, x):
-        c1 = max_channel_pool(x)  # Eq. (11)
-        c2 = avg_channel_pool(x)  # Eq. (12)
-        c3 = torch.cat([c1, c2], dim=1)  # Eq. (13)
-        c4 = self.conv(c3)  # Eq. (14)
-        c5 = self.sigmoid(c4) * x  # Eq. (15)
-        return c5
+        avg_out = torch.mean(x, dim=1, keepdim=True)
+        max_out, _ = torch.max(x, dim=1, keepdim=True)
+        out = torch.cat([avg_out, max_out], dim=1)
+        out = self.conv(out)
+        out = self.bn(out)
+        scale = x * torch.sigmoid(out)
+        return scale
 
 
 class MultimodalFusion(nn.Module):
@@ -107,7 +70,7 @@ class BiFusionBlock(nn.Module):
     def __init__(self, num_channels):
         super(BiFusionBlock, self).__init__()
         self.ca = ChannelAttention(num_channels)  # Channel Attention
-        self.sa = SpatialAttention(num_channels)  # Spatial Attention
+        self.sa = SpatialAttention()  # Spatial Attention
         self.fusion = MultimodalFusion(num_channels)  # Multimodal Fusion
         self.residual = nn.Sequential(
             nn.Conv2d(num_channels * 3, num_channels, kernel_size=1),  # Residual connection
@@ -165,7 +128,7 @@ if __name__ == '__main__':
         output = model(batch_ti, batch_ci)
         expected_shape = (1, 16, 64, 64)  # Assuming no change in spatial dimensions and channels
         assert output.shape == expected_shape, f"Expected shape {expected_shape}, got {output.shape}"
-        print("Test Output Shape Passed")
+        print(f"Test Output Shape Passed, Input shape=2*{batch_ti.shape}, output shape: {output.shape}")
 
     test_inf_values()
     test_nan_values()
