@@ -53,6 +53,7 @@ import torch.nn as nn
 import SimpleITK as sitk
 import ml_collections
 DATA_PATH = 'D:/kaggle'
+PRETRAINED_WEIGHTS_PATH = '../../model/vit_checkpoint/imagenet21k/R50+ViT-B_16.npz'
 tqdm.pandas()
 wf_seed = 0
 
@@ -106,7 +107,7 @@ def get_r50_b16_config():
     config.resnet.width_factor = 1
 
     config.classifier = 'seg'
-    config.pretrained_path = '../../model/vit_checkpoint/imagenet21k/R50+ViT-B_16.npz'
+    config.pretrained_path = PRETRAINED_WEIGHTS_PATH
     config.decoder_channels = (256, 128, 64, 16)
     config.skip_channels = [512, 256, 64, 16]
     config.n_classes = 2
