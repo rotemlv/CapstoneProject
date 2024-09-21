@@ -1,0 +1,7 @@
+This code requires the my_weights.bin file to run.
+We could not include it due to space constraints (the model's size is ~450Mbs), contact us via email to obtain these weights.
+Rotem.Levi@e.braude.ac.il
+
+To run this, place the weights in this folder and run the "predict_with_gui.py" file
+Debug:
+In case of import error, make sure to install requirements.txt

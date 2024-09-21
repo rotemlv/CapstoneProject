@@ -1,53 +1,41 @@
-# coding=utf-8
-# from __future__ import absolute_import
-# from __future__ import division
-# from __future__ import print_function
+### test ###
 
+import argparse
 import copy
 import logging
-# import math
-import torch
-import torch.nn as nn
-import numpy as np
-
-from torch.nn import CrossEntropyLoss, Dropout, Softmax, Linear, Conv2d, LayerNorm
-from scipy import ndimage
-import ml_collections
-from os.path import join as pjoin
+import os
+import random
+import sys
 from collections import OrderedDict
+# pd.options.plotting.backend = "plotly"
+from glob import glob
 
+# Albumentations for augmentations
+import albumentations as A
+# visualization
+import cv2
+import matplotlib.pyplot as plt
+import ml_collections
+import numpy as np
+import pandas as pd
+import torch
+import torch.backends.cudnn as cudnn
+import torch.nn as nn
 import torch.nn.functional as F
+import torch.nn.functional as Functional
+import torch.optim as optim
+from matplotlib.patches import Rectangle
+from scipy import ndimage
+from segmentation_models_pytorch.losses import DiceLoss as smpDL, SoftBCEWithLogitsLoss, TverskyLoss
+from tensorboardX import SummaryWriter
+from torch.nn import Dropout, Softmax, Linear, Conv2d, LayerNorm
+from torch.nn.modules.loss import CrossEntropyLoss
+from torch.nn.modules.utils import _pair
+from torch.utils.data import DataLoader
+# PyTorch
+from torch.utils.data import Dataset
+from tqdm import tqdm
 
-
-class StdConv2d(nn.Conv2d):
-
-    def forward(self, x):
-        w = self.weight
-        v, m = torch.var_mean(w, dim=[1, 2, 3], keepdim=True, unbiased=False)
-        w = (w - m) / torch.sqrt(v + 1e-5)
-        return F.conv2d(x, w, self.bias, self.stride, self.padding,
-                        self.dilation, self.groups)
-
-
-def conv3x3(cin, cout, stride=1, groups=1, bias=False):
-    return StdConv2d(cin, cout, kernel_size=3, stride=stride,
-                     padding=1, bias=bias, groups=groups)
-
-
-def conv1x1(cin, cout, stride=1, bias=False):
-    return StdConv2d(cin, cout, kernel_size=1, stride=stride,
-                     padding=0, bias=bias)
-
-
-def np2th(weights, conv=False):
-    """Possibly convert HWIO to OIHW."""
-    if conv:
-        weights = weights.transpose([3, 2, 0, 1])
-    return torch.from_numpy(weights)
-
-
-def swish(x):
-    return x * torch.sigmoid(x)
 
 
 def get_b16_config():
@@ -65,7 +53,7 @@ def get_b16_config():
     config.classifier = 'seg'
     config.representation_size = None
     config.resnet_pretrained_path = None
-    config.pretrained_path = '../input/project-transunet/project_TransUNet/model/vit_checkpoint/imagenet21k/ViT-B_16.npz'
+    config.pretrained_path = '../model/vit_checkpoint/imagenet21k/ViT-B_16.npz'
     config.patch_size = 16
 
     config.decoder_channels = (256, 128, 64, 16)
@@ -99,7 +87,7 @@ def get_r50_b16_config():
     config.resnet.width_factor = 1
 
     config.classifier = 'seg'
-    config.pretrained_path = '../input/project-transunet/project_TransUNet/model/vit_checkpoint/imagenet21k/R50+ViT-B_16.npz'
+    config.pretrained_path = "https://console.cloud.google.com/storage/browser/_details/vit_models/imagenet21k/R50%2BViT-B_16.npz"
     config.decoder_channels = (256, 128, 64, 16)
     config.skip_channels = [512, 256, 64, 16]
     config.n_classes = 2
@@ -113,8 +101,7 @@ def get_b32_config():
     """Returns the ViT-B/32 configuration."""
     config = get_b16_config()
     config.patches.size = (32, 32)
-    config.pretrained_path = '../input/project-transunet/project_TransUNet/model/vit_checkpoint/imagenet21k/ViT-B_32' \
-                             '.npz '
+    config.pretrained_path = '../model/vit_checkpoint/imagenet21k/ViT-B_32.npz'
     return config
 
 
@@ -134,7 +121,7 @@ def get_l16_config():
     # custom
     config.classifier = 'seg'
     config.resnet_pretrained_path = None
-    config.pretrained_path = '../input/project-transunet/project_TransUNet/model/vit_checkpoint/imagenet21k/ViT-L_16.npz'
+    config.pretrained_path = '../model/vit_checkpoint/imagenet21k/ViT-L_16.npz'
     config.decoder_channels = (256, 128, 64, 16)
     config.n_classes = 2
     config.activation = 'softmax'
@@ -150,7 +137,7 @@ def get_r50_l16_config():
     config.resnet.width_factor = 1
 
     config.classifier = 'seg'
-    config.resnet_pretrained_path = '../input/project-transunet/project_TransUNet/model/vit_checkpoint/imagenet21k/R50+ViT-B_16.npz'
+    config.resnet_pretrained_path = '../model/vit_checkpoint/imagenet21k/R50+ViT-B_16.npz'
     config.decoder_channels = (256, 128, 64, 16)
     config.skip_channels = [512, 256, 64, 16]
     config.n_classes = 2
@@ -181,6 +168,41 @@ def get_h14_config():
 
     return config
 
+def worker_init_fn(worker_id):
+    random.seed(worker_id)
+
+
+# import math
+
+
+def np2th(weights, conv=False):
+    """Possibly convert HWIO to OIHW."""
+    if conv:
+        weights = weights.transpose([3, 2, 0, 1])
+    return torch.from_numpy(weights)
+
+
+class StdConv2d(nn.Conv2d):
+
+    def forward(self, x):
+        w = self.weight
+        # v, m = torch.var_mean(w, dim=[1, 2, 3], keepdim=True, unbiased=False)
+        v = torch.var(w, dim=[1, 2, 3], unbiased=False, keepdim=True)
+        m = torch.mean(w, dim=[1, 2, 3], keepdim=True)
+        w = (w - m) / torch.sqrt(v + 1e-5)
+        return F.conv2d(x, w, self.bias, self.stride, self.padding,
+                        self.dilation, self.groups)
+
+
+def conv3x3(cin, cout, stride=1, groups=1, bias=False):
+    return StdConv2d(cin, cout, kernel_size=3, stride=stride,
+                     padding=1, bias=bias, groups=groups)
+
+
+def conv1x1(cin, cout, stride=1, bias=False):
+    return StdConv2d(cin, cout, kernel_size=1, stride=stride,
+                     padding=0, bias=bias)
+
 
 class PreActBottleneck(nn.Module):
     """Pre-activation (v2) bottleneck block.
@@ -199,7 +221,7 @@ class PreActBottleneck(nn.Module):
         self.conv3 = conv1x1(cmid, cout, bias=False)
         self.relu = nn.ReLU(inplace=True)
 
-        if stride != 1 or cin != cout:
+        if (stride != 1 or cin != cout):
             # Projection also with pre-activation according to paper.
             self.downsample = conv1x1(cin, cout, stride, bias=False)
             self.gn_proj = nn.GroupNorm(cout, cout)
@@ -221,18 +243,18 @@ class PreActBottleneck(nn.Module):
         return y
 
     def load_from(self, weights, n_block, n_unit):
-        conv1_weight = np2th(weights[pjoin(n_block, n_unit, "conv1/kernel")], conv=True)
-        conv2_weight = np2th(weights[pjoin(n_block, n_unit, "conv2/kernel")], conv=True)
-        conv3_weight = np2th(weights[pjoin(n_block, n_unit, "conv3/kernel")], conv=True)
+        conv1_weight = np2th(weights[(n_block + "/" + n_unit + "/" + "conv1/kernel")], conv=True)
+        conv2_weight = np2th(weights[(n_block + "/" + n_unit + "/" + "conv2/kernel")], conv=True)
+        conv3_weight = np2th(weights[(n_block + "/" + n_unit + "/" + "conv3/kernel")], conv=True)
 
-        gn1_weight = np2th(weights[pjoin(n_block, n_unit, "gn1/scale")])
-        gn1_bias = np2th(weights[pjoin(n_block, n_unit, "gn1/bias")])
+        gn1_weight = np2th(weights[(n_block + "/" + n_unit + "/" + "gn1/scale")])
+        gn1_bias = np2th(weights[(n_block + "/" + n_unit + "/" + "gn1/bias")])
 
-        gn2_weight = np2th(weights[pjoin(n_block, n_unit, "gn2/scale")])
-        gn2_bias = np2th(weights[pjoin(n_block, n_unit, "gn2/bias")])
+        gn2_weight = np2th(weights[(n_block + "/" + n_unit + "/" + "gn2/scale")])
+        gn2_bias = np2th(weights[(n_block + "/" + n_unit + "/" + "gn2/bias")])
 
-        gn3_weight = np2th(weights[pjoin(n_block, n_unit, "gn3/scale")])
-        gn3_bias = np2th(weights[pjoin(n_block, n_unit, "gn3/bias")])
+        gn3_weight = np2th(weights[(n_block + "/" + n_unit + "/" + "gn3/scale")])
+        gn3_bias = np2th(weights[(n_block + "/" + n_unit + "/" + "gn3/bias")])
 
         self.conv1.weight.copy_(conv1_weight)
         self.conv2.weight.copy_(conv2_weight)
@@ -248,9 +270,9 @@ class PreActBottleneck(nn.Module):
         self.gn3.bias.copy_(gn3_bias.view(-1))
 
         if hasattr(self, 'downsample'):
-            proj_conv_weight = np2th(weights[pjoin(n_block, n_unit, "conv_proj/kernel")], conv=True)
-            proj_gn_weight = np2th(weights[pjoin(n_block, n_unit, "gn_proj/scale")])
-            proj_gn_bias = np2th(weights[pjoin(n_block, n_unit, "gn_proj/bias")])
+            proj_conv_weight = np2th(weights[(n_block + "/" + n_unit + "/" + "conv_proj/kernel")], conv=True)
+            proj_gn_weight = np2th(weights[(n_block + "/" + n_unit + "/" + "gn_proj/scale")])
+            proj_gn_bias = np2th(weights[(n_block + "/" + n_unit + "/" + "gn_proj/bias")])
 
             self.downsample.weight.copy_(proj_conv_weight)
             self.gn_proj.weight.copy_(proj_gn_weight.view(-1))
@@ -258,8 +280,7 @@ class PreActBottleneck(nn.Module):
 
 
 class ResNetV2(nn.Module):
-    """Implementation of Pre-activation (v2) ResNet mode.
-    Skip connections are returned from here."""
+    """Implementation of Pre-activation (v2) ResNet mode."""
 
     def __init__(self, block_units, width_factor):
         super().__init__()
@@ -312,6 +333,12 @@ class ResNetV2(nn.Module):
         return x, features[::-1]
 
 
+"""
+This version of transunet contains the TUP and BiF block as implemented by me according to the equations in 
+the paper.
+Saved in separate file before transformer decoder integration.
+
+"""
 logger = logging.getLogger(__name__)
 
 ATTENTION_Q = "MultiHeadDotProductAttention_1/query"
@@ -323,7 +350,240 @@ FC_1 = "MlpBlock_3/Dense_1"
 ATTENTION_NORM = "LayerNorm_0"
 MLP_NORM = "LayerNorm_2"
 
+
+def np2th(weights, conv=False):
+    """Possibly convert HWIO to OIHW."""
+    if conv:
+        weights = weights.transpose([3, 2, 0, 1])
+    return torch.from_numpy(weights)
+
+
+def swish(x):
+    return x * torch.sigmoid(x)
+
+
 ACT2FN = {"gelu": torch.nn.functional.gelu, "relu": torch.nn.functional.relu, "swish": swish}
+
+
+####### TUP ########
+class StdConv2d(nn.Conv2d):
+    """Standard Convolution with weight normalization."""
+
+    def forward(self, x):
+        w = self.weight
+        v, m = torch.var_mean(w, dim=[1, 2, 3], keepdim=True, unbiased=False)
+        w = (w - m) / torch.sqrt(v + 1e-5)
+        return Functional.conv2d(x, w, self.bias, self.stride, self.padding, self.dilation, self.groups)
+
+
+class DoubleConv(nn.Module):
+    """(convolution(3x3, pad=1) => [BN] => ReLU) * 2
+    Currently uses the wrapper above"""
+
+    def __init__(self, in_channels, out_channels, mid_channels=None):
+        super().__init__()
+        if not mid_channels:
+            mid_channels = out_channels
+        self.double_conv = nn.Sequential(
+            StdConv2d(in_channels, mid_channels, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(mid_channels),
+            nn.ReLU(inplace=True),
+            StdConv2d(mid_channels, out_channels, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True)
+        )
+
+    def forward(self, x):
+        return self.double_conv(x)
+
+
+class TUP(nn.Module):
+    """Transformer UP-sampler.
+    Inputs: transformer output features
+    Outputs: transformer output features scaled up, in preparation to enter BiFusion block.
+    """
+
+    def __init__(self, cin, cout):
+        super().__init__()
+        cmid = (cin + cout) // 2
+        self.up = nn.UpsamplingBilinear2d(scale_factor=2)
+        self.dblConv = DoubleConv(cin, cout, cmid)
+        self.conv1 = nn.Sequential(
+            StdConv2d(cin, cout, kernel_size=1, bias=False),
+            nn.BatchNorm2d(cout),
+            nn.ReLU(inplace=True)
+        )
+
+    def forward(self, x):
+        # Upsample features
+        upsampled_x = self.up(x)
+
+        # Residual branch processing
+        residual = self.conv1(upsampled_x)
+
+        # Main branch processing
+        y = self.dblConv(upsampled_x)
+
+        # Integrate features through element-wise multiplication
+        y = y * residual
+
+        return y
+
+
+####### BiFusion ########
+"""
+This variant is loyal to the implementation mentioned in the sources provided in BiFTransNet
+"""
+
+
+class Flatten(nn.Module):
+    def forward(self, x):
+        return x.view(x.size(0), -1)
+
+
+class ChannelAttention(nn.Module):
+    def __init__(self, input_channels, reduction_ratio=16):
+        super(ChannelAttention, self).__init__()
+        self.input_channels = input_channels
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.max_pool = nn.AdaptiveMaxPool2d(1)
+        #  uses Convolutions instead of Linear
+        self.MLP = nn.Sequential(
+            Flatten(),
+            nn.Linear(input_channels, input_channels // reduction_ratio),
+            nn.ReLU(),
+            nn.Linear(input_channels // reduction_ratio, input_channels)
+        )
+
+    def forward(self, x):
+        # Take the input and apply average and max pooling
+        avg_values = self.avg_pool(x)
+        max_values = self.max_pool(x)
+        out = self.MLP(avg_values) + self.MLP(max_values)
+        scale = x * torch.sigmoid(out).unsqueeze(2).unsqueeze(3).expand_as(x)
+        return scale
+
+
+class AvgSpatial(nn.Module):
+    def forward(self, x):
+        return Functional.avg_pool2d(x, x.size()[2:])
+
+
+class TripleConv(nn.Module):
+    def __init__(self, num_channels):
+        super(TripleConv, self).__init__()
+        self.conv1 = nn.Conv2d(num_channels, num_channels, kernel_size=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(num_channels)
+        self.relu1 = nn.ReLU(inplace=True)
+
+        self.conv2 = nn.Conv2d(num_channels, num_channels, kernel_size=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(num_channels)
+        self.relu2 = nn.ReLU(inplace=True)
+
+        self.conv3 = nn.Conv2d(num_channels, num_channels, kernel_size=1, bias=False)
+        self.bn3 = nn.BatchNorm2d(num_channels)
+        self.relu3 = nn.ReLU(inplace=True)
+
+    def forward(self, x):
+        do_bn = x.size(2) > 1 and x.size(3) > 1  # Check if spatial dimensions are larger than 1x1
+        identity = x
+
+        out = self.conv1(x)
+        if do_bn:
+            out = self.bn1(out)
+        out = self.relu1(out)
+
+        out = out + identity  # Skip connection
+
+        out = self.conv2(out)
+        if do_bn:  # Check again for spatial dimensions
+            out = self.bn2(out)
+        out = self.relu2(out)
+
+        out = out + identity  # Another skip connection
+
+        out = self.conv3(out)
+        if do_bn:  # Final check for spatial dimensions
+            out = self.bn3(out)
+        out = self.relu3(out)
+
+        return out
+
+
+class ConvChannelAttention(nn.Module):
+    def __init__(self, num_channels):
+        super(ConvChannelAttention, self).__init__()
+        self.avg_spatial = AvgSpatial()  # Average spatial pooling
+        self.triple_conv = TripleConv(num_channels)  # Triple convolution block
+        self.sigmoid = nn.Sigmoid()  # Sigmoid activation
+
+    def forward(self, x):
+        out = self.avg_spatial(x)  # Eq. (8)
+        out = self.triple_conv(out)  # Eq. (9)
+        out = self.sigmoid(out) * x  # Eq. (10)
+        return out
+
+
+class SpatialAttention(nn.Module):
+    def __init__(self, kernel_size=7):
+        super(SpatialAttention, self).__init__()
+        assert kernel_size in (3, 7), 'kernel size must be 3 or 7'
+        padding = 3 if kernel_size == 7 else 1
+        self.conv = nn.Conv2d(2, 1, kernel_size=kernel_size, padding=padding, bias=False)
+        self.bn = nn.InstanceNorm2d(1, affine=True)  # in lieu of batchnorm
+        # fixes the following error:
+        # RuntimeError: Function NativeBatchNormBackward0 returned an invalid gradient at index 1 -
+        # got [] but expected shape compatible with [1]
+
+    def forward(self, x):
+        avg_out = torch.mean(x, dim=1, keepdim=True)
+        max_out, _ = torch.max(x, dim=1, keepdim=True)
+        out = torch.cat([avg_out, max_out], dim=1)
+        out = self.conv(out)
+        out = self.bn(out)
+        out = x * torch.sigmoid(out)
+        return out
+
+
+class MultimodalFusion(nn.Module):
+    def __init__(self, num_channels):
+        super(MultimodalFusion, self).__init__()
+        self.conv = Conv2dReLU(num_channels, num_channels, kernel_size=3, padding=1)
+
+    def forward(self, ti, ci):
+        # Adjusting to match the paper's description -
+        # early version contained a mistake (concatenation instead of Hadamard)
+        out = ti * ci  # Element-wise multiplication (Hadamard product)
+        out = self.conv(out)  # Apply convolution
+        return out
+
+
+class BiFusion_block(nn.Module):
+    def __init__(self, num_channels, use_conv_channel_att=True):
+        super(BiFusion_block, self).__init__()
+        if use_conv_channel_att:
+            print("Initialized conv channel attention!")
+            self.ca = ConvChannelAttention(num_channels)
+        else:
+            self.ca = ChannelAttention(num_channels)  # Channel Attention
+        self.sa = SpatialAttention()  # Spatial Attention
+        self.fusion = MultimodalFusion(num_channels)  # Multimodal Fusion
+        self.residual = nn.Sequential(
+            nn.Conv2d(num_channels * 3, num_channels, kernel_size=1, bias=False),  # Residual connection
+            nn.BatchNorm2d(num_channels),
+            nn.ReLU(inplace=True)
+        )
+
+    def forward(self, ti, ci):
+        t3 = self.ca(ti)  # Output of Channel Attention
+        c5 = self.sa(ci)  # Output of Spatial Attention
+        fi = self.fusion(ti, ci)  # Output of Multimodal Fusion
+        out = torch.cat([t3, c5, fi], dim=1)  # Concatenate outputs
+        out = self.residual(out)  # Pass through residual module
+        return out
+
+
+### ### ###
 
 
 class Attention(nn.Module):
@@ -406,8 +666,8 @@ class Embeddings(nn.Module):
         super(Embeddings, self).__init__()
         self.hybrid = None
         self.config = config
-        assert isinstance(img_size, int), "Insert image size as an int (square images only)!"
-        img_size = (img_size, img_size)
+        img_size = _pair(img_size)
+
         if config.patches.get("grid") is not None:  # ResNet
             grid_size = config.patches["grid"]
             patch_size = (img_size[0] // 16 // grid_size[0], img_size[1] // 16 // grid_size[1])
@@ -415,8 +675,7 @@ class Embeddings(nn.Module):
             n_patches = (img_size[0] // patch_size_real[0]) * (img_size[1] // patch_size_real[1])
             self.hybrid = True
         else:
-            assert isinstance(config.patches["size"], int), "config.patches['size'] must be an int"
-            patch_size = (config.patches["size"], config.patches["size"])
+            patch_size = _pair(config.patches["size"])
             n_patches = (img_size[0] // patch_size[0]) * (img_size[1] // patch_size[1])
             self.hybrid = False
 
@@ -469,18 +728,19 @@ class Block(nn.Module):
     def load_from(self, weights, n_block):
         ROOT = f"Transformer/encoderblock_{n_block}"
         with torch.no_grad():
-            query_weight = np2th(weights[pjoin(ROOT, ATTENTION_Q, "kernel")]).view(self.hidden_size,
-                                                                                   self.hidden_size).t()
-            key_weight = np2th(weights[pjoin(ROOT, ATTENTION_K, "kernel")]).view(self.hidden_size, self.hidden_size).t()
-            value_weight = np2th(weights[pjoin(ROOT, ATTENTION_V, "kernel")]).view(self.hidden_size,
-                                                                                   self.hidden_size).t()
-            out_weight = np2th(weights[pjoin(ROOT, ATTENTION_OUT, "kernel")]).view(self.hidden_size,
-                                                                                   self.hidden_size).t()
+            query_weight = np2th(weights[(ROOT + "/" + ATTENTION_Q + "/" + "kernel.npy")]).view(self.hidden_size,
+                                                                                                self.hidden_size).t()
+            key_weight = np2th(weights[(ROOT + "/" + ATTENTION_K + "/" + "kernel.npy")]).view(self.hidden_size,
+                                                                                              self.hidden_size).t()
+            value_weight = np2th(weights[(ROOT + "/" + ATTENTION_V + "/" + "kernel.npy")]).view(self.hidden_size,
+                                                                                                self.hidden_size).t()
+            out_weight = np2th(weights[(ROOT + "/" + ATTENTION_OUT + "/" + "kernel.npy")]).view(self.hidden_size,
+                                                                                                self.hidden_size).t()
 
-            query_bias = np2th(weights[pjoin(ROOT, ATTENTION_Q, "bias")]).view(-1)
-            key_bias = np2th(weights[pjoin(ROOT, ATTENTION_K, "bias")]).view(-1)
-            value_bias = np2th(weights[pjoin(ROOT, ATTENTION_V, "bias")]).view(-1)
-            out_bias = np2th(weights[pjoin(ROOT, ATTENTION_OUT, "bias")]).view(-1)
+            query_bias = np2th(weights[(ROOT + "/" + ATTENTION_Q + "/" + "bias.npy")]).view(-1)
+            key_bias = np2th(weights[(ROOT + "/" + ATTENTION_K + "/" + "bias.npy")]).view(-1)
+            value_bias = np2th(weights[(ROOT + "/" + ATTENTION_V + "/" + "bias.npy")]).view(-1)
+            out_bias = np2th(weights[(ROOT + "/" + ATTENTION_OUT + "/" + "bias.npy")]).view(-1)
 
             self.attn.query.weight.copy_(query_weight)
             self.attn.key.weight.copy_(key_weight)
@@ -491,20 +751,20 @@ class Block(nn.Module):
             self.attn.value.bias.copy_(value_bias)
             self.attn.out.bias.copy_(out_bias)
 
-            mlp_weight_0 = np2th(weights[pjoin(ROOT, FC_0, "kernel")]).t()
-            mlp_weight_1 = np2th(weights[pjoin(ROOT, FC_1, "kernel")]).t()
-            mlp_bias_0 = np2th(weights[pjoin(ROOT, FC_0, "bias")]).t()
-            mlp_bias_1 = np2th(weights[pjoin(ROOT, FC_1, "bias")]).t()
+            mlp_weight_0 = np2th(weights[(ROOT + "/" + FC_0 + "/" + "kernel.npy")]).t()
+            mlp_weight_1 = np2th(weights[(ROOT + "/" + FC_1 + "/" + "kernel.npy")]).t()
+            mlp_bias_0 = np2th(weights[(ROOT + "/" + FC_0 + "/" + "bias.npy")]).t()
+            mlp_bias_1 = np2th(weights[(ROOT + "/" + FC_1 + "/" + "bias.npy")]).t()
 
             self.ffn.fc1.weight.copy_(mlp_weight_0)
             self.ffn.fc2.weight.copy_(mlp_weight_1)
             self.ffn.fc1.bias.copy_(mlp_bias_0)
             self.ffn.fc2.bias.copy_(mlp_bias_1)
 
-            self.attention_norm.weight.copy_(np2th(weights[pjoin(ROOT, ATTENTION_NORM, "scale")]))
-            self.attention_norm.bias.copy_(np2th(weights[pjoin(ROOT, ATTENTION_NORM, "bias")]))
-            self.ffn_norm.weight.copy_(np2th(weights[pjoin(ROOT, MLP_NORM, "scale")]))
-            self.ffn_norm.bias.copy_(np2th(weights[pjoin(ROOT, MLP_NORM, "bias")]))
+            self.attention_norm.weight.copy_(np2th(weights[(ROOT + "/" + ATTENTION_NORM + "/" + "scale.npy")]))
+            self.attention_norm.bias.copy_(np2th(weights[(ROOT + "/" + ATTENTION_NORM + "/" + "bias.npy")]))
+            self.ffn_norm.weight.copy_(np2th(weights[(ROOT + "/" + MLP_NORM + "/" + "scale.npy")]))
+            self.ffn_norm.bias.copy_(np2th(weights[(ROOT + "/" + MLP_NORM + "/" + "bias.npy")]))
 
 
 class Encoder(nn.Module):
@@ -553,7 +813,7 @@ class Conv2dReLU(nn.Sequential):
             in_channels,
             out_channels,
             kernel_size,
-            stride=(stride, stride),
+            stride=stride,
             padding=padding,
             bias=not use_batchnorm,
         )
@@ -563,22 +823,36 @@ class Conv2dReLU(nn.Sequential):
 
         super(Conv2dReLU, self).__init__(conv, bn, relu)
 
-
 class DecoderBlock(nn.Module):
     def __init__(
             self,
             in_channels,
             out_channels,
             skip_channels=0,
+            residual_channels=0,
             use_batchnorm=True,
+            use_bi_fusion=True,
+            use_multiscale=False,
     ):
         super().__init__()
         """
-        Insert Bi-Fusion here
+        BiF block here!
         The bif block is a per-tier block - instead of in-channels + skip-channels as inputs,
-        we want to get transformer-upsampled channels + skip-channels.
+        we want to get in-channels + BiFusion output channels.
+        Also, 
         """
-        self.bifusion = ...
+        self.use_bi_fusion = False
+        self.use_multiscale = False
+        if use_bi_fusion and skip_channels:
+            self.use_bi_fusion = True
+            self.bifusion = BiFusion_block(skip_channels)
+        if use_multiscale and residual_channels:
+
+            self.use_multiscale = True
+            self.reduce_conv_res = Conv2dReLU(residual_channels, skip_channels // 2, 3, 1)
+            self.reduce_conv_skip = Conv2dReLU(skip_channels, skip_channels // 2, 3, 1)
+            self.up_res = nn.UpsamplingBilinear2d(scale_factor=4)  # prep size of residual input
+
 
         self.conv1 = Conv2dReLU(
             in_channels + skip_channels,
@@ -596,25 +870,44 @@ class DecoderBlock(nn.Module):
         )
         self.up = nn.UpsamplingBilinear2d(scale_factor=2)
 
-    def forward(self, x, skip=None):
+    def forward(self, x, skip=None, tup_out=None, res_in=None):
         x = self.up(x)
         if skip is not None:
+            if self.use_multiscale and res_in is not None:
+                # residual skip inserted here:
+                res_in = self.reduce_conv_res(res_in)  # reduce channel count
+                res_in = self.up_res(res_in)  # fit dimensions
+                # reduce skip channel dimension
+                skip = self.reduce_conv_skip(skip)
+                skip = torch.cat((skip, res_in), dim=1)
+            """
+            Forward pass addition of the BiF block
+            """
+            if self.use_bi_fusion and tup_out is not None:
+                assert skip.shape == tup_out.shape
+                skip = self.bifusion(skip, tup_out)
             x = torch.cat([x, skip], dim=1)
+
+
+
+        # regular U-Net decoder block:
         x = self.conv1(x)
         x = self.conv2(x)
+        # print(f'fOutput shape={x.shape}\n')
         return x
+
 
 
 class SegmentationHead(nn.Sequential):
 
     def __init__(self, in_channels, out_channels, kernel_size=3, upsampling=1):
-        conv2d = nn.Conv2d(in_channels, out_channels, kernel_size=(kernel_size, kernel_size), padding=kernel_size // 2)
+        conv2d = nn.Conv2d(in_channels, out_channels, kernel_size=kernel_size, padding=kernel_size // 2)
         upsampling = nn.UpsamplingBilinear2d(scale_factor=upsampling) if upsampling > 1 else nn.Identity()
         super().__init__(conv2d, upsampling)
 
 
 class DecoderCup(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, multiscale=False):
         super().__init__()
         self.config = config
         head_channels = 512
@@ -625,6 +918,7 @@ class DecoderCup(nn.Module):
             padding=1,
             use_batchnorm=True,
         )
+        self.multiscale = multiscale
         decoder_channels = config.decoder_channels
         in_channels = [head_channels] + list(decoder_channels[:-1])
         out_channels = decoder_channels
@@ -638,35 +932,73 @@ class DecoderCup(nn.Module):
 
         else:
             skip_channels = [0, 0, 0, 0]
+        if self.multiscale:
+            blocks = [
+                DecoderBlock(in_ch, out_ch, sk_ch, 2*in_ch if (i > 0 and sk_ch > 0) else 0,
+                             use_multiscale=True if (i > 0 and sk_ch > 0) else False)
+                for i, (in_ch, out_ch, sk_ch) in
+                enumerate(zip(in_channels, out_channels, skip_channels))
+            ]
+        else:
+            blocks = [
+                DecoderBlock(in_ch, out_ch, sk_ch) for in_ch, out_ch, sk_ch in
+                zip(in_channels, out_channels, skip_channels)
+            ]
+        tup_blocks = None
+        if skip_channels:
+            tup_blocks = []
+            # first tup - take head and set it to skip connection size
+            last_tup_input_size = head_channels
+            for idx in range(len(skip_channels)):
 
-        blocks = [
-            DecoderBlock(in_ch, out_ch, sk_ch) for in_ch, out_ch, sk_ch in zip(in_channels, out_channels, skip_channels)
-        ]
+                if skip_channels[idx]:  # we actually use this skip channel
+                    # then create a tup block and set input=last tup output and output = skip channel size
+                    # print(f"{skip_channels[idx]=}, {idx=}, {last_tup_input_size=}")
+                    tup_blocks.append(TUP(last_tup_input_size, skip_channels[idx]))
+                    last_tup_input_size = skip_channels[idx]
+
         self.blocks = nn.ModuleList(blocks)
+        if tup_blocks is not None:
+            # define TUP blocks modules
+            self.TUP_blocks = nn.ModuleList(tup_blocks)
 
     def forward(self, hidden_states, features=None):
+        out_features = []
         B, n_patch, hidden = hidden_states.size()  # reshape from (B, n_patch, hidden) to (B, h, w, hidden)
         h, w = int(np.sqrt(n_patch)), int(np.sqrt(n_patch))
         x = hidden_states.permute(0, 2, 1)
         x = x.contiguous().view(B, hidden, h, w)
-        x = self.conv_more(x)
+        x = self.conv_more(x)  # x is now basically the transformer output
+        tup_out = x  # save the original state of transformer embeddings
+        tup_idx = 0
+        before_last = x
+        last = x
         for i, decoder_block in enumerate(self.blocks):
             if features is not None:
                 skip = features[i] if (i < self.config.n_skip) else None
+                if tup_idx < len(self.TUP_blocks):
+                    # use TUP:
+                    tup_out = self.TUP_blocks[tup_idx](tup_out)
+                    tup_idx += 1
             else:
                 skip = None
-            x = decoder_block(x, skip=skip)
+            x = decoder_block(x, skip=skip, tup_out=tup_out, res_in=before_last if self.multiscale and i else None)
+            before_last = last
+            last = x
         return x
 
 
+
 class VisionTransformer(nn.Module):
-    def __init__(self, config, img_size=224, num_classes=21843, zero_head=False, vis=False):
+    def __init__(self, config, img_size=224, num_classes=21843, zero_head=False, vis=False, multiscale=True):
         super(VisionTransformer, self).__init__()
         self.num_classes = num_classes
         self.zero_head = zero_head
         self.classifier = config.classifier
         self.transformer = Transformer(config, img_size, vis)
-        self.decoder = DecoderCup(config)
+        if multiscale:
+            print("Model initialized WITH multiscale skip connection component!")
+        self.decoder = DecoderCup(config, multiscale=multiscale)
         self.segmentation_head = SegmentationHead(
             in_channels=config['decoder_channels'][-1],
             out_channels=config['n_classes'],
@@ -674,25 +1006,26 @@ class VisionTransformer(nn.Module):
         )
         self.config = config
 
+
     def forward(self, x):
         if x.size()[1] == 1:
-            x = x.repeat(1, 3, 1, 1)
+            x = x.repeat(1, 3, 1, 1)  # "convert" a 1D image to 3D (if input is 1D)
         x, attn_weights, features = self.transformer(x)  # (B, n_patch, hidden)
         x = self.decoder(x, features)
         logits = self.segmentation_head(x)
         return logits
 
     def load_from(self, weights):
+
         with torch.no_grad():
 
             res_weight = weights
-            self.transformer.embeddings.patch_embeddings.weight.copy_(np2th(weights["embedding/kernel"], conv=True))
-            self.transformer.embeddings.patch_embeddings.bias.copy_(np2th(weights["embedding/bias"]))
+            self.transformer.embeddings.patch_embeddings.weight.copy_(np2th(weights["embedding/kernel.npy"], conv=True))
+            self.transformer.embeddings.patch_embeddings.bias.copy_(np2th(weights["embedding/bias.npy"]))
+            self.transformer.encoder.encoder_norm.weight.copy_(np2th(weights["Transformer/encoder_norm/scale.npy"]))
+            self.transformer.encoder.encoder_norm.bias.copy_(np2th(weights["Transformer/encoder_norm/bias.npy"]))
 
-            self.transformer.encoder.encoder_norm.weight.copy_(np2th(weights["Transformer/encoder_norm/scale"]))
-            self.transformer.encoder.encoder_norm.bias.copy_(np2th(weights["Transformer/encoder_norm/bias"]))
-
-            posemb = np2th(weights["Transformer/posembed_input/pos_embedding"])
+            posemb = np2th(weights["Transformer/posembed_input/pos_embedding.npy"])
 
             posemb_new = self.transformer.embeddings.position_embeddings
             if posemb.size() == posemb_new.size():
@@ -722,9 +1055,9 @@ class VisionTransformer(nn.Module):
 
             if self.transformer.embeddings.hybrid:
                 self.transformer.embeddings.hybrid_model.root.conv.weight.copy_(
-                    np2th(res_weight["conv_root/kernel"], conv=True))
-                gn_weight = np2th(res_weight["gn_root/scale"]).view(-1)
-                gn_bias = np2th(res_weight["gn_root/bias"]).view(-1)
+                    np2th(res_weight["conv_root/kernel.npy"], conv=True))
+                gn_weight = np2th(res_weight["gn_root/scale.npy"]).view(-1)
+                gn_bias = np2th(res_weight["gn_root/bias.npy"]).view(-1)
                 self.transformer.embeddings.hybrid_model.root.gn.weight.copy_(gn_weight)
                 self.transformer.embeddings.hybrid_model.root.gn.bias.copy_(gn_bias)
 
@@ -744,63 +1077,5 @@ CONFIGS = {
     'testing': get_testing(),
 }
 
-# net = VisionTransformer(get_r50_b16_config(), img_size=224, num_classes=4)
-zzroot_path = '../data/Synapse/train_npz'
-zzdataset = 'Synapse'
-zzlist_dir = './lists/lists_Synapse'
-zznum_classes = 9
-zzmax_iterations = 30000
-zzmax_epochs = 150
-zzbatch_size = 32
-zzn_gpu = 1
-zzdeterministic = 1
-zzbase_lr = 0.01
-zzimg_size = 224
-zzseed = 1234
-zzn_skip = 3
-zzvit_name = 'R50-ViT-B_16'
-zzvit_patches_size = 16
 
-if __name__ == "__main__":
-
-    np.random.seed(zzseed)
-    torch.manual_seed(zzseed)
-    torch.cuda.manual_seed(zzseed)
-    dataset_name = zzdataset
-    dataset_config = {
-        'Synapse': {
-            'root_path': '../input/project-transunet/project_TransUNet/data/Synapse/train_npz',
-            'list_dir': '../input/project-transunet/project_TransUNet/TransUNet/lists/lists_Synapse',
-            'num_classes': 9,
-        },
-    }
-    zznum_classes = dataset_config[dataset_name]['num_classes']
-    zzroot_path = dataset_config[dataset_name]['root_path']
-    zzlist_dir = dataset_config[dataset_name]['list_dir']
-    zzis_pretrain = True
-    zzexp = 'TU_' + dataset_name + str(zzimg_size)
-
-    config_vit = CONFIGS[zzvit_name]
-    config_vit.n_classes = zznum_classes
-    config_vit.n_skip = zzn_skip
-    if zzvit_name.find('R50') != -1:
-        config_vit.patches.grid = (int(zzimg_size / zzvit_patches_size), int(zzimg_size / zzvit_patches_size))
-    net = VisionTransformer(config_vit, img_size=zzimg_size, num_classes=config_vit.n_classes)
-
-    # Step 1: Import necessary libraries (already done above)
-
-    # Step 2: Prepare test data
-    # Creating a dummy image tensor of shape (1, 3, 224, 224)
-    test_data = torch.randn(1, 3, 224, 224)
-
-    # Step 4: Forward pass through the model
-    with torch.no_grad():  # No gradients needed for inference
-        logits = net(test_data)
-
-    # Step 5: Check output shape
-    print("Output shape:", logits.shape)
-    # Expected output shape depends on the segmentation head's out_channels and the spatial dimensions after
-    # processing For example, if the output is meant to be a segmentation map of the same spatial dimensions as
-    # input, expect something like (1, zznum_classes, H, W)
-    # for param in net.parameters():
-    #     print(param, param.shape)
+### end test ###
