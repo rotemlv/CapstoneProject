@@ -20,12 +20,12 @@ and improved patient outcomes.
 
 ## Additional info:
 Implementation ahead, components to be built (in folder "Stage2"):
-- [] BiFusion block: added file, work in progress (still does not work)
-- [X] TUP block
-- [] Coarse-to-fine attention block (according to the 3D-TransUNet specs)
-- [] Multi-scale skip connections: either Seminar TransAttUnet strategy or imo MultiTrans can also be good)
-- [] Data augmentation techniques
-- [] Multi-level loss (as part of the training process
-- [] Test hyperparameters
-- [] Review results
-- [] GUI wrapper
+- [V] BiFusion block: added file, work in progress (still does not work)
+- [V] TUP block
+- [X] Coarse-to-fine attention block (according to the 3D-TransUNet specs) - scrapped due to GPU memory cost.
+- [V] Multi-scale skip connections: either Seminar TransAttUnet strategy or imo MultiTrans can also be good)
+- [V] Data augmentation techniques
+- [X] Multi-level loss (as part of the training process) - tested and removed due to lower accuracy.
+- [V] Test hyperparameters
+- [V] Review results
+- [V] GUI wrapper
