@@ -19,7 +19,7 @@ contribute to the advancement of radiation therapy planning, leading to more eff
 and improved patient outcomes.
 
 ## Additional info:
-Implementation ahead, components to be built (in folder "Stage2"):
+Implementation ahead, components described below are now included (in folder "Phase2"):
 -  :heavy_check_mark:  BiFusion block: fixed using the BiFTransNet paper's mathematical formulae
 -  :heavy_check_mark:  TUP block
 -  ✖️ Coarse-to-fine attention block (according to the 3D-TransUNet specs) - scrapped due to GPU memory cost.
